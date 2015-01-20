@@ -2,9 +2,9 @@
 
 Usage:
     ngxtop [options]
-    ngxtop [options] (print|top|avg|sum) <var> ...
-    ngxtop info
-    ngxtop [options] query <query> ...
+    ngxtop [options] (info|print|top|avg|sum) <var> ...
+    ngxtop [options] info
+    ngxtop [options] query <query> <fields>...
 
 Options:
     -l <file>, --access-log <file>  access log file to parse.
@@ -83,19 +83,20 @@ DEFAULT_QUERIES = [
      '''SELECT
        count(1)                                    AS count,
        avg(bytes_sent)                             AS avg_bytes_sent,
+       avg(request_time)                           As request_time,
        count(CASE WHEN status_type = 2 THEN 1 END) AS '2xx',
        count(CASE WHEN status_type = 3 THEN 1 END) AS '3xx',
        count(CASE WHEN status_type = 4 THEN 1 END) AS '4xx',
        count(CASE WHEN status_type = 5 THEN 1 END) AS '5xx'
      FROM log
-     ORDER BY %(--order-by)s DESC
-     LIMIT %(--limit)s'''),
+     ORDER BY %(--order-by)s DESC'''),
 
     ('Detailed:',
      '''SELECT
        %(--group-by)s,
        count(1)                                    AS count,
        avg(bytes_sent)                             AS avg_bytes_sent,
+       avg(request_time)                           As request_time,
        count(CASE WHEN status_type = 2 THEN 1 END) AS '2xx',
        count(CASE WHEN status_type = 3 THEN 1 END) AS '3xx',
        count(CASE WHEN status_type = 4 THEN 1 END) AS '4xx',
@@ -106,8 +107,6 @@ DEFAULT_QUERIES = [
      ORDER BY %(--order-by)s DESC
      LIMIT %(--limit)s''')
 ]
-
-DEFAULT_FIELDS = set(['status_type', 'bytes_sent'])
 
 
 # ======================
@@ -190,6 +189,7 @@ def parse_log(lines, pattern):
     records = add_field('bytes_sent', lambda r: r['body_bytes_sent'], records)
     records = map_field('bytes_sent', to_int, records)
     records = map_field('request_time', to_float, records)
+    records = map_field('upstream_response_time', to_float, records)
     records = add_field('request_path', parse_request_path, records)
     return records
 
@@ -198,22 +198,32 @@ def parse_log(lines, pattern):
 # Records and statistic processor
 # =================================
 class SQLProcessor(object):
-    def __init__(self, report_queries, fields, index_fields=None):
+    def __init__(self, report_queries, index_fields=None):
         self.begin = False
         self.report_queries = report_queries
         self.index_fields = index_fields if index_fields is not None else []
-        self.column_list = ','.join(fields)
-        self.holder_list = ','.join(':%s' % var for var in fields)
         self.conn = sqlite3.connect(':memory:')
-        self.init_db()
+        self.has_inited = False
+        self.last_id = 0
+
+    def insert(self, record, cursor):
+        fields = sorted(record.keys())
+
+        if not self.has_inited:
+            self.init_db(fields)
+            self.has_inited = True
+
+        column_list = ','.join(fields)
+        holder_list = ','.join(':%s' % var for var in fields)
+
+        insert = 'insert into log (%s) values (%s)' % (column_list, holder_list)
+        cursor.execute(insert, record)
 
     def process(self, records):
         self.begin = time.time()
-        insert = 'insert into log (%s) values (%s)' % (self.column_list, self.holder_list)
-        logging.info('sqlite insert: %s', insert)
         with closing(self.conn.cursor()) as cursor:
             for r in records:
-                cursor.execute(insert, r)
+                self.insert(r, cursor)
 
     def report(self):
         if not self.begin:
@@ -234,8 +244,14 @@ class SQLProcessor(object):
                 output.append('%s\n%s' % (label, result))
         return '\n\n'.join(output)
 
-    def init_db(self):
-        create_table = 'create table log (%s)' % self.column_list
+    def clear_data(self):
+        with closing(self.conn.cursor()) as cursor:
+            cursor.execute('delete from log where id < %s', self.last_id)
+
+        self.last_id = self.find_max_id()
+
+    def init_db(self, column_list):
+        create_table = 'create table log (%s)' % ','.join(column_list)
         with closing(self.conn.cursor()) as cursor:
             logging.info('sqlite init: %s', create_table)
             cursor.execute(create_table)
@@ -243,6 +259,11 @@ class SQLProcessor(object):
                 sql = 'create index log_idx%d on log (%s)' % (idx, field)
                 logging.info('sqlite init: %s', sql)
                 cursor.execute(sql)
+
+    def find_max_id(self):
+        with closing(self.conn.cursor()) as cursor:
+            cursor.execute('select max(id) from log')
+            return cursor.fetchone()[0]
 
     def count(self):
         with closing(self.conn.cursor()) as cursor:
@@ -294,10 +315,8 @@ def build_processor(arguments):
         report_queries = [(label, query)]
     elif arguments['query']:
         report_queries = arguments['<query>']
-        fields = arguments['<fields>']
     else:
         report_queries = [(name, query % arguments) for name, query in DEFAULT_QUERIES]
-        fields = DEFAULT_FIELDS.union(set([arguments['--group-by']]))
 
     for label, query in report_queries:
         logging.info('query for "%s":\n %s', label, query)
@@ -306,7 +325,7 @@ def build_processor(arguments):
     for field in fields:
         processor_fields.extend(field.split(','))
 
-    processor = SQLProcessor(report_queries, processor_fields)
+    processor = SQLProcessor(report_queries)
     return processor
 
 
@@ -329,6 +348,7 @@ def setup_reporter(processor, arguments):
     atexit.register(curses.endwin)
 
     def print_report(sig, frame):
+        processor.clear_data()
         output = processor.report()
         scr.erase()
         try:

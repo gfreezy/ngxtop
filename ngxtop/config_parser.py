@@ -36,8 +36,7 @@ def detect_config_path():
     try:
         proc = subprocess.Popen(['nginx', '-V'], stderr=subprocess.PIPE)
     except OSError:
-        error_exit('Access log file or format was not set and nginx config file cannot be detected. ' +
-                   'Perhaps nginx is not in your PATH?')
+        return 'Not found'
 
     stdout, stderr = proc.communicate()
     version_output = stderr.decode('utf-8')
