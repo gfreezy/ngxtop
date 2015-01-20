@@ -2,8 +2,7 @@
 
 Usage:
     ngxtop [options]
-    ngxtop [options] (info|print|top|avg|sum) <var> ...
-    ngxtop [options] info
+    ngxtop [options] (info|print|top|avg|sum) [<var> ...]
     ngxtop [options] query <query> <fields>...
 
 Options:
@@ -226,7 +225,7 @@ class SQLProcessor(object):
                 self.insert(r, cursor)
 
     def report(self):
-        if not self.begin:
+        if not self.begin or not self.has_inited:
             return ''
         count = self.count()
         duration = time.time() - self.begin
@@ -245,13 +244,15 @@ class SQLProcessor(object):
         return '\n\n'.join(output)
 
     def clear_data(self):
+        if not self.has_inited:
+            return
         with closing(self.conn.cursor()) as cursor:
-            cursor.execute('delete from log where id < %s', self.last_id)
+            cursor.execute('delete from log where id < %s' % self.last_id)
 
         self.last_id = self.find_max_id()
 
     def init_db(self, column_list):
-        create_table = 'create table log (%s)' % ','.join(column_list)
+        create_table = 'create table log (id integer primary key,%s)' % ','.join(column_list)
         with closing(self.conn.cursor()) as cursor:
             logging.info('sqlite init: %s', create_table)
             cursor.execute(create_table)
@@ -405,6 +406,8 @@ def main():
         process(args)
     except KeyboardInterrupt:
         sys.exit(0)
+    except:
+        logging.exception('Exception')
 
 
 if __name__ == '__main__':
