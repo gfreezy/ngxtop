@@ -16,9 +16,13 @@ REGEX_LOG_FORMAT_VARIABLE = r'\$([a-zA-Z0-9\_]+)'
 LOG_FORMAT_COMBINED = '$remote_addr - $remote_user [$time_local] ' \
                       '"$request" $status $body_bytes_sent ' \
                       '"$http_referer" "$http_user_agent"'
-LOG_FORMAT_COMMON   = '$remote_addr - $remote_user [$time_local] ' \
+LOG_FORMAT_COMMON = '$remote_addr - $remote_user [$time_local] ' \
                       '"$request" $status $body_bytes_sent ' \
                       '"$http_x_forwarded_for"'
+
+LOG_FORMAT_XCF = '$remote_addr $time_local $timezone "$request" ' \
+                    '$status $bytes_sent "$http_referer" "$http_user_agent" ' \
+                     '$upstream_response_time $request_time $upstream_addr'
 
 # common parser element
 semicolon = Literal(';').suppress()
@@ -131,6 +135,8 @@ def build_pattern(log_format):
         log_format = LOG_FORMAT_COMBINED
     elif log_format == 'common':
         log_format = LOG_FORMAT_COMMON
+    elif log_format == 'xcf':
+        log_format = LOG_FORMAT_XCF
     pattern = re.sub(REGEX_SPECIAL_CHARS, r'\\\1', log_format)
     pattern = re.sub(REGEX_LOG_FORMAT_VARIABLE, '(?P<\\1>.*)', pattern)
     return re.compile(pattern)
