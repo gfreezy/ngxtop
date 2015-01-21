@@ -231,7 +231,7 @@ class SQLProcessor(object):
             return ''
         count = self.count()
         duration = time.time() - self.begin
-        status = 'running for %.0f seconds, %d records processed: %.2f req/sec'
+        status = 'for last %.0f seconds, %d records processed: %.2f req/sec'
         output = [status % (duration, count, count / duration)]
         with closing(self.conn.cursor()) as cursor:
             for query in self.report_queries:
@@ -251,6 +251,7 @@ class SQLProcessor(object):
         with closing(self.conn.cursor()) as cursor:
             cursor.execute('delete from log where id < %s' % self.last_id)
 
+        self.begin = time.time()
         self.last_id = self.find_max_id()
 
     def init_db(self, column_list):
